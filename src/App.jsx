@@ -256,7 +256,7 @@ export default function App() {
           </div>
 
           <div style={{ fontSize: 13, color: "#555" }}>
-            ⚠️ No login: anyone with the access code can view/edit this team.
+            
           </div>
         </div>
       ) : (
