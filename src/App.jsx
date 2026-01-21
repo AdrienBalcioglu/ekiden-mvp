@@ -110,7 +110,8 @@ export default function App() {
       // - keep this dummy value:
       const { data: t, error: tErr } = await supabase
         .from("teams")
-        .insert({ name: teamName.trim(), join_code: code, created_by: crypto.randomUUID() })
+        .insert({ name: teamName.trim(), join_code: code })
+
         .select("*")
         .single();
 
