@@ -30,19 +30,18 @@ const LS = {
 };
 
 export default function App() {
-  const [step, setStep] = useState("landing"); // landing | team | dashboard
-
-  // Team
   const [team, setTeam] = useState(null);
+
+  // Landing inputs
   const [teamName, setTeamName] = useState("");
   const [joinCode, setJoinCode] = useState("");
 
-  // Runner
+  // Runners
   const [runners, setRunners] = useState([]);
   const [selectedRunnerId, setSelectedRunnerId] = useState("");
   const [newRunnerName, setNewRunnerName] = useState("");
 
-  // Perf
+  // Performance inputs
   const [distanceKm, setDistanceKm] = useState("5");
   const [timeH, setTimeH] = useState("0");
   const [timeM, setTimeM] = useState("25");
@@ -54,7 +53,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
-  // Auto-restore last join code (optional nice UX)
+  // Restore last used team code (optional UX)
   useEffect(() => {
     const last = localStorage.getItem(LS.teamCode);
     if (last) setJoinCode(last);
@@ -67,6 +66,36 @@ export default function App() {
     return { totalDistance, totalSeconds, avgPace };
   }, [legs]);
 
+  function runnerNameById(id) {
+    return runners.find((r) => r.id === id)?.name || "Runner";
+  }
+
+  async function loadDashboard(teamId) {
+    await Promise.all([loadRunners(teamId), loadLegs(teamId)]);
+    const saved = localStorage.getItem(LS.runnerIdByTeam(teamId));
+    if (saved) setSelectedRunnerId(saved);
+  }
+
+  async function loadRunners(teamId) {
+    const { data, error } = await supabase
+      .from("runners")
+      .select("id, name, created_at")
+      .eq("team_id", teamId)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    setRunners(data ?? []);
+  }
+
+  async function loadLegs(teamId) {
+    const { data, error } = await supabase
+      .from("legs2")
+      .select("runner_id, distance_km, time_seconds, updated_at")
+      .eq("team_id", teamId)
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    setLegs(data ?? []);
+  }
+
   async function createTeam() {
     setMsg("");
     if (!teamName.trim()) return setMsg("Team name required.");
@@ -74,20 +103,23 @@ export default function App() {
     try {
       const code = makeJoinCode();
 
-      // NOTE: requires RLS disabled or permissive anon policies
+      // NOTE: requires RLS disabled on teams (or anon-friendly policies)
+      // If your teams table still has NOT NULL created_by, you have 2 options:
+      // - make created_by nullable, or
+      // - set a default, or
+      // - keep this dummy value:
       const { data: t, error: tErr } = await supabase
         .from("teams")
-        .insert({ name: teamName.trim(), join_code: code, created_by: crypto.randomUUID() }) // created_by kept just to satisfy NOT NULL if your schema has it
+        .insert({ name: teamName.trim(), join_code: code, created_by: crypto.randomUUID() })
         .select("*")
         .single();
 
       if (tErr) throw tErr;
 
       setTeam(t);
-      setStep("dashboard");
       localStorage.setItem(LS.teamCode, t.join_code);
-
       await loadDashboard(t.id);
+      setMsg("Team created ✅");
     } catch (e) {
       setMsg(e.message ?? String(e));
     } finally {
@@ -105,10 +137,9 @@ export default function App() {
       if (tErr) throw tErr;
 
       setTeam(t);
-      setStep("dashboard");
       localStorage.setItem(LS.teamCode, code);
-
       await loadDashboard(t.id);
+      setMsg("Joined team ✅");
     } catch (e) {
       setMsg(e.message ?? String(e));
     } finally {
@@ -116,42 +147,11 @@ export default function App() {
     }
   }
 
-  async function loadDashboard(teamId) {
-    await Promise.all([loadRunners(teamId), loadLegs(teamId)]);
-    // restore last selected runner (per device)
-    const saved = localStorage.getItem(LS.runnerIdByTeam(teamId));
-    if (saved) setSelectedRunnerId(saved);
-  }
-
-  async function loadRunners(teamId) {
-    const { data, error } = await supabase
-      .from("runners")
-      .select("id, name, created_at")
-      .eq("team_id", teamId)
-      .order("created_at", { ascending: true });
-
-    if (error) throw error;
-    setRunners(data ?? []);
-  }
-
-  async function loadLegs(teamId) {
-    // join runners name client-side (simple)
-    const { data, error } = await supabase
-      .from("legs2")
-      .select("runner_id, distance_km, time_seconds, updated_at")
-      .eq("team_id", teamId)
-      .order("updated_at", { ascending: false });
-
-    if (error) throw error;
-    setLegs(data ?? []);
-  }
-
   async function createRunner() {
     if (!team?.id) return;
     setMsg("");
     const name = newRunnerName.trim();
     if (!name) return setMsg("Runner name required.");
-
     setLoading(true);
     try {
       const { data, error } = await supabase
@@ -159,7 +159,6 @@ export default function App() {
         .insert({ team_id: team.id, name })
         .select("id, name")
         .single();
-
       if (error) throw error;
 
       await loadRunners(team.id);
@@ -185,7 +184,9 @@ export default function App() {
     if (!selectedRunnerId) return setMsg("Select a runner first.");
 
     const d = Number(distanceKm);
-    const h = Number(timeH), m = Number(timeM), s = Number(timeS);
+    const h = Number(timeH),
+      m = Number(timeM),
+      s = Number(timeS);
     const total = h * 3600 + m * 60 + s;
 
     if (!isFinite(d) || d <= 0) return setMsg("Distance must be > 0.");
@@ -213,16 +214,11 @@ export default function App() {
     }
   }
 
-  function runnerNameById(id) {
-    return runners.find((r) => r.id === id)?.name || "Runner";
-  }
-
-  function resetTeam() {
+  function changeTeam() {
     setTeam(null);
     setRunners([]);
     setLegs([]);
     setSelectedRunnerId("");
-    setStep("landing");
     setMsg("");
   }
 
@@ -230,11 +226,7 @@ export default function App() {
     <div style={{ padding: 20, maxWidth: 900 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
         <h1 style={{ margin: 0 }}>Ekiden MVP</h1>
-        {team ? (
-          <button onClick={resetTeam} title="Leave this team on this device">
-            Change team
-          </button>
-        ) : null}
+        {team ? <button onClick={changeTeam}>Change team</button> : null}
       </div>
 
       {msg ? <p style={{ color: msg.includes("✅") ? "green" : "crimson" }}>{msg}</p> : null}
@@ -263,7 +255,7 @@ export default function App() {
           </div>
 
           <div style={{ fontSize: 13, color: "#555" }}>
-            ⚠️ No login: anyone with the join code can view/edit the team data.
+            ⚠️ No login: anyone with the access code can view/edit this team.
           </div>
         </div>
       ) : (
@@ -289,23 +281,21 @@ export default function App() {
               {runners.length === 0 ? (
                 <p>No runners yet. Create the first one.</p>
               ) : (
-                <div style={{ display: "grid", gap: 8 }}>
-                  <label>
-                    Pick an existing runner:
-                    <select
-                      value={selectedRunnerId}
-                      onChange={(e) => selectRunner(e.target.value)}
-                      style={{ marginLeft: 10 }}
-                    >
-                      <option value="">-- select --</option>
-                      {runners.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
+                <label>
+                  Pick an existing runner:
+                  <select
+                    value={selectedRunnerId}
+                    onChange={(e) => selectRunner(e.target.value)}
+                    style={{ marginLeft: 10 }}
+                  >
+                    <option value="">-- select --</option>
+                    {runners.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
 
               <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
