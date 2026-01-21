@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient";
 
 function secondsToHms(total) {
-  const s = Math.max(0, Math.floor(total));
+  const s = Math.max(0, Math.floor(Number(total || 0)));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const r = s % 60;
@@ -10,7 +10,7 @@ function secondsToHms(total) {
   return `${pad(h)}:${pad(m)}:${pad(r)}`;
 }
 
-function secondsPerKmToPace(secPerKm) {
+function pace(secPerKm) {
   if (!isFinite(secPerKm) || secPerKm <= 0) return "-";
   const m = Math.floor(secPerKm / 60);
   const s = Math.round(secPerKm % 60);
@@ -18,165 +18,76 @@ function secondsPerKmToPace(secPerKm) {
 }
 
 function makeJoinCode() {
-  // simple code like EKIDEN-7H2K
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const part = () =>
     Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
   return `EKIDEN-${part()}`;
 }
 
+const LS = {
+  teamCode: "ekiden.teamCode",
+  runnerIdByTeam: (teamId) => `ekiden.runnerId.${teamId}`,
+};
+
 export default function App() {
-  const [session, setSession] = useState(null);
+  const [step, setStep] = useState("landing"); // landing | team | dashboard
 
-  // Auth UI
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-
-  // Team UI
+  // Team
   const [team, setTeam] = useState(null);
   const [teamName, setTeamName] = useState("");
   const [joinCode, setJoinCode] = useState("");
 
-  // Perf UI
-  const [runnerName, setRunnerName] = useState("");
-  const [distanceKm, setDistanceKm] = useState("");
+  // Runner
+  const [runners, setRunners] = useState([]);
+  const [selectedRunnerId, setSelectedRunnerId] = useState("");
+  const [newRunnerName, setNewRunnerName] = useState("");
+
+  // Perf
+  const [distanceKm, setDistanceKm] = useState("5");
   const [timeH, setTimeH] = useState("0");
-  const [timeM, setTimeM] = useState("0");
+  const [timeM, setTimeM] = useState("25");
   const [timeS, setTimeS] = useState("0");
 
-  // Team legs
+  // Legs
   const [legs, setLegs] = useState([]);
+
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
 
-  const userId = session?.user?.id ?? null;
-
+  // Auto-restore last join code (optional nice UX)
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
+    const last = localStorage.getItem(LS.teamCode);
+    if (last) setJoinCode(last);
   }, []);
-
-  async function loadMyTeam() {
-    if (!userId) return;
-    setLoading(true);
-    setMsg("");
-    try {
-      // find a team_id from memberships
-      const { data: memberships, error: mErr } = await supabase
-        .from("team_members")
-        .select("team_id")
-        .eq("user_id", userId)
-        .limit(1);
-
-      if (mErr) throw mErr;
-
-      const teamId = memberships?.[0]?.team_id;
-      if (!teamId) {
-        setTeam(null);
-        setLegs([]);
-        return;
-      }
-
-      const { data: t, error: tErr } = await supabase.from("teams").select("*").eq("id", teamId).single();
-      if (tErr) throw tErr;
-      setTeam(t);
-
-      await loadTeamLegs(t.id);
-      await loadMyLeg(t.id);
-    } catch (e) {
-      setMsg(e.message ?? String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadTeamLegs(teamId) {
-    const { data, error } = await supabase
-      .from("legs")
-      .select("user_id, runner_name, distance_km, time_seconds, updated_at")
-      .eq("team_id", teamId)
-      .order("updated_at", { ascending: false });
-
-    if (error) throw error;
-    setLegs(data ?? []);
-  }
-
-  async function loadMyLeg(teamId) {
-    const { data, error } = await supabase
-      .from("legs")
-      .select("runner_name, distance_km, time_seconds")
-      .eq("team_id", teamId)
-      .eq("user_id", userId)
-      .maybeSingle();
-
-    if (error) throw error;
-
-    if (data) {
-      setRunnerName(data.runner_name ?? "");
-      setDistanceKm(String(data.distance_km ?? ""));
-      const ts = Number(data.time_seconds ?? 0);
-      setTimeH(String(Math.floor(ts / 3600)));
-      setTimeM(String(Math.floor((ts % 3600) / 60)));
-      setTimeS(String(ts % 60));
-    }
-  }
-
-  useEffect(() => {
-    if (userId) loadMyTeam();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
 
   const totals = useMemo(() => {
     const totalDistance = legs.reduce((acc, l) => acc + Number(l.distance_km || 0), 0);
     const totalSeconds = legs.reduce((acc, l) => acc + Number(l.time_seconds || 0), 0);
-    const pace = totalDistance > 0 ? totalSeconds / totalDistance : Infinity;
-    return { totalDistance, totalSeconds, pace };
+    const avgPace = totalDistance > 0 ? totalSeconds / totalDistance : Infinity;
+    return { totalDistance, totalSeconds, avgPace };
   }, [legs]);
 
-  async function signUp() {
-    setMsg("");
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) setMsg(error.message);
-    else setMsg("Check your email if confirmation is enabled. Otherwise you can sign in.");
-  }
-
-  async function signIn() {
-    setMsg("");
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) setMsg(error.message);
-  }
-
-  async function signOut() {
-    await supabase.auth.signOut();
-    setTeam(null);
-    setLegs([]);
-  }
-
   async function createTeam() {
-    
-console.log("session user id:", session?.user?.id);
-const { data: s } = await supabase.auth.getSession();
-console.log("getSession:", s?.session?.user?.id, "access_token?", !!s?.session?.access_token);
-
     setMsg("");
     if (!teamName.trim()) return setMsg("Team name required.");
     setLoading(true);
     try {
       const code = makeJoinCode();
+
+      // NOTE: requires RLS disabled or permissive anon policies
       const { data: t, error: tErr } = await supabase
         .from("teams")
-        .insert({ name: teamName.trim(), join_code: code, created_by: userId })
+        .insert({ name: teamName.trim(), join_code: code, created_by: crypto.randomUUID() }) // created_by kept just to satisfy NOT NULL if your schema has it
         .select("*")
         .single();
+
       if (tErr) throw tErr;
 
-      const { error: mErr } = await supabase.from("team_members").insert({ team_id: t.id, user_id: userId });
-      if (mErr) throw mErr;
-
       setTeam(t);
-      setTeamName("");
-      await loadTeamLegs(t.id);
+      setStep("dashboard");
+      localStorage.setItem(LS.teamCode, t.join_code);
+
+      await loadDashboard(t.id);
     } catch (e) {
       setMsg(e.message ?? String(e));
     } finally {
@@ -193,13 +104,11 @@ console.log("getSession:", s?.session?.user?.id, "access_token?", !!s?.session?.
       const { data: t, error: tErr } = await supabase.from("teams").select("*").eq("join_code", code).single();
       if (tErr) throw tErr;
 
-      const { error: mErr } = await supabase.from("team_members").insert({ team_id: t.id, user_id: userId });
-      if (mErr) throw mErr;
-
       setTeam(t);
-      setJoinCode("");
-      await loadTeamLegs(t.id);
-      await loadMyLeg(t.id);
+      setStep("dashboard");
+      localStorage.setItem(LS.teamCode, code);
+
+      await loadDashboard(t.id);
     } catch (e) {
       setMsg(e.message ?? String(e));
     } finally {
@@ -207,31 +116,95 @@ console.log("getSession:", s?.session?.user?.id, "access_token?", !!s?.session?.
     }
   }
 
-  async function saveMyPerf() {
+  async function loadDashboard(teamId) {
+    await Promise.all([loadRunners(teamId), loadLegs(teamId)]);
+    // restore last selected runner (per device)
+    const saved = localStorage.getItem(LS.runnerIdByTeam(teamId));
+    if (saved) setSelectedRunnerId(saved);
+  }
+
+  async function loadRunners(teamId) {
+    const { data, error } = await supabase
+      .from("runners")
+      .select("id, name, created_at")
+      .eq("team_id", teamId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+    setRunners(data ?? []);
+  }
+
+  async function loadLegs(teamId) {
+    // join runners name client-side (simple)
+    const { data, error } = await supabase
+      .from("legs2")
+      .select("runner_id, distance_km, time_seconds, updated_at")
+      .eq("team_id", teamId)
+      .order("updated_at", { ascending: false });
+
+    if (error) throw error;
+    setLegs(data ?? []);
+  }
+
+  async function createRunner() {
     if (!team?.id) return;
     setMsg("");
+    const name = newRunnerName.trim();
+    if (!name) return setMsg("Runner name required.");
+
     setLoading(true);
     try {
-      const d = Number(distanceKm);
-      const h = Number(timeH), m = Number(timeM), s = Number(timeS);
-      const total = h * 3600 + m * 60 + s;
+      const { data, error } = await supabase
+        .from("runners")
+        .insert({ team_id: team.id, name })
+        .select("id, name")
+        .single();
 
-      if (!isFinite(d) || d <= 0) return setMsg("Distance must be > 0.");
-      if (!isFinite(total) || total <= 0) return setMsg("Time must be > 0.");
+      if (error) throw error;
 
+      await loadRunners(team.id);
+      setSelectedRunnerId(data.id);
+      localStorage.setItem(LS.runnerIdByTeam(team.id), data.id);
+      setNewRunnerName("");
+      setMsg("Runner created ✅");
+    } catch (e) {
+      setMsg(e.message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function selectRunner(id) {
+    setSelectedRunnerId(id);
+    if (team?.id) localStorage.setItem(LS.runnerIdByTeam(team.id), id);
+  }
+
+  async function savePerf() {
+    if (!team?.id) return;
+    setMsg("");
+    if (!selectedRunnerId) return setMsg("Select a runner first.");
+
+    const d = Number(distanceKm);
+    const h = Number(timeH), m = Number(timeM), s = Number(timeS);
+    const total = h * 3600 + m * 60 + s;
+
+    if (!isFinite(d) || d <= 0) return setMsg("Distance must be > 0.");
+    if (!isFinite(total) || total <= 0) return setMsg("Time must be > 0.");
+
+    setLoading(true);
+    try {
       const payload = {
         team_id: team.id,
-        user_id: userId,
-        runner_name: runnerName.trim() || null,
+        runner_id: selectedRunnerId,
         distance_km: d,
         time_seconds: total,
         updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase.from("legs").upsert(payload);
+      const { error } = await supabase.from("legs2").upsert(payload);
       if (error) throw error;
 
-      await loadTeamLegs(team.id);
+      await loadLegs(team.id);
       setMsg("Saved ✅");
     } catch (e) {
       setMsg(e.message ?? String(e));
@@ -240,39 +213,35 @@ console.log("getSession:", s?.session?.user?.id, "access_token?", !!s?.session?.
     }
   }
 
-  if (!session) {
-    return (
-      <div style={{ padding: 20, maxWidth: 520 }}>
-        <h1>Ekiden MVP</h1>
-        <p>Login required</p>
+  function runnerNameById(id) {
+    return runners.find((r) => r.id === id)?.name || "Runner";
+  }
 
-        <div style={{ display: "grid", gap: 10 }}>
-          <input placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-          <input placeholder="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-
-          <div style={{ display: "flex", gap: 10 }}>
-            <button onClick={signIn}>Sign in</button>
-            <button onClick={signUp}>Sign up</button>
-          </div>
-
-          {msg && <p style={{ color: "crimson" }}>{msg}</p>}
-        </div>
-      </div>
-    );
+  function resetTeam() {
+    setTeam(null);
+    setRunners([]);
+    setLegs([]);
+    setSelectedRunnerId("");
+    setStep("landing");
+    setMsg("");
   }
 
   return (
-    <div style={{ padding: 20, maxWidth: 820 }}>
+    <div style={{ padding: 20, maxWidth: 900 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <h1>Ekiden MVP</h1>
-        <button onClick={signOut}>Sign out</button>
+        <h1 style={{ margin: 0 }}>Ekiden MVP</h1>
+        {team ? (
+          <button onClick={resetTeam} title="Leave this team on this device">
+            Change team
+          </button>
+        ) : null}
       </div>
 
-      {msg && <p style={{ color: msg.includes("✅") ? "green" : "crimson" }}>{msg}</p>}
-      {loading && <p>Loading…</p>}
+      {msg ? <p style={{ color: msg.includes("✅") ? "green" : "crimson" }}>{msg}</p> : null}
+      {loading ? <p>Loading…</p> : null}
 
       {!team ? (
-        <div style={{ display: "grid", gap: 18, marginTop: 10 }}>
+        <div style={{ display: "grid", gap: 16, marginTop: 12 }}>
           <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14 }}>
             <h2 style={{ marginTop: 0 }}>Create a team</h2>
             <input placeholder="Team name" value={teamName} onChange={(e) => setTeamName(e.target.value)} />
@@ -283,81 +252,129 @@ console.log("getSession:", s?.session?.user?.id, "access_token?", !!s?.session?.
 
           <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14 }}>
             <h2 style={{ marginTop: 0 }}>Join a team</h2>
-            <input placeholder="Join code (ex: EKIDEN-7H2K)" value={joinCode} onChange={(e) => setJoinCode(e.target.value)} />
+            <input
+              placeholder="Join code (ex: EKIDEN-2L3N)"
+              value={joinCode}
+              onChange={(e) => setJoinCode(e.target.value)}
+            />
             <div style={{ marginTop: 10 }}>
               <button onClick={joinTeam}>Join</button>
             </div>
           </div>
+
+          <div style={{ fontSize: 13, color: "#555" }}>
+            ⚠️ No login: anyone with the join code can view/edit the team data.
+          </div>
         </div>
       ) : (
         <>
-          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14, marginTop: 10 }}>
+          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14, marginTop: 12 }}>
             <h2 style={{ marginTop: 0 }}>Team: {team.name}</h2>
             <p>
-              Join code: <b>{team.join_code}</b>
+              Access code: <b>{team.join_code}</b>
             </p>
             <p>
               Total distance: <b>{totals.totalDistance.toFixed(2)} km</b>
               <br />
               Total time: <b>{secondsToHms(totals.totalSeconds)}</b>
               <br />
-              Avg pace: <b>{secondsPerKmToPace(totals.pace)}</b>
+              Avg pace: <b>{pace(totals.avgPace)}</b>
             </p>
           </div>
 
-          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14, marginTop: 14 }}>
-            <h2 style={{ marginTop: 0 }}>My performance</h2>
-            <div style={{ display: "grid", gap: 10 }}>
-              <input placeholder="Runner name (optional)" value={runnerName} onChange={(e) => setRunnerName(e.target.value)} />
+          <div style={{ display: "grid", gap: 14, marginTop: 14 }}>
+            <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14 }}>
+              <h2 style={{ marginTop: 0 }}>Who are you?</h2>
 
-              <input
-                placeholder="Distance (km)"
-                inputMode="decimal"
-                value={distanceKm}
-                onChange={(e) => setDistanceKm(e.target.value)}
-              />
+              {runners.length === 0 ? (
+                <p>No runners yet. Create the first one.</p>
+              ) : (
+                <div style={{ display: "grid", gap: 8 }}>
+                  <label>
+                    Pick an existing runner:
+                    <select
+                      value={selectedRunnerId}
+                      onChange={(e) => selectRunner(e.target.value)}
+                      style={{ marginLeft: 10 }}
+                    >
+                      <option value="">-- select --</option>
+                      {runners.map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              )}
 
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <span>Time</span>
-                <input style={{ width: 80 }} inputMode="numeric" value={timeH} onChange={(e) => setTimeH(e.target.value)} />
-                <span>h</span>
-                <input style={{ width: 80 }} inputMode="numeric" value={timeM} onChange={(e) => setTimeM(e.target.value)} />
-                <span>m</span>
-                <input style={{ width: 80 }} inputMode="numeric" value={timeS} onChange={(e) => setTimeS(e.target.value)} />
-                <span>s</span>
+              <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <input
+                  placeholder="Or create a new runner name"
+                  value={newRunnerName}
+                  onChange={(e) => setNewRunnerName(e.target.value)}
+                />
+                <button onClick={createRunner}>Create runner</button>
               </div>
 
-              <button onClick={saveMyPerf}>Save</button>
+              {selectedRunnerId ? (
+                <p style={{ marginTop: 10 }}>
+                  Selected: <b>{runnerNameById(selectedRunnerId)}</b>
+                </p>
+              ) : null}
             </div>
-          </div>
 
-          <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14, marginTop: 14 }}>
-            <h2 style={{ marginTop: 0 }}>Team legs</h2>
+            <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14 }}>
+              <h2 style={{ marginTop: 0 }}>Performance</h2>
 
-            {legs.length === 0 ? (
-              <p>No performances yet.</p>
-            ) : (
               <div style={{ display: "grid", gap: 10 }}>
-                {legs.map((l) => {
-                  const dist = Number(l.distance_km || 0);
-                  const time = Number(l.time_seconds || 0);
-                  const pace = dist > 0 ? time / dist : Infinity;
-                  const isMe = l.user_id === userId;
+                <input
+                  placeholder="Distance (km)"
+                  inputMode="decimal"
+                  value={distanceKm}
+                  onChange={(e) => setDistanceKm(e.target.value)}
+                />
 
-                  return (
-                    <div key={l.user_id} style={{ padding: 10, border: "1px solid #eee", borderRadius: 10 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                        <b>{l.runner_name || (isMe ? "Me" : "Runner")}</b>
-                        <span>{isMe ? "You" : ""}</span>
-                      </div>
-                      <div>
-                        {dist.toFixed(2)} km — {secondsToHms(time)} — <b>{secondsPerKmToPace(pace)}</b>
-                      </div>
-                    </div>
-                  );
-                })}
+                <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <span>Time</span>
+                  <input style={{ width: 80 }} inputMode="numeric" value={timeH} onChange={(e) => setTimeH(e.target.value)} />
+                  <span>h</span>
+                  <input style={{ width: 80 }} inputMode="numeric" value={timeM} onChange={(e) => setTimeM(e.target.value)} />
+                  <span>m</span>
+                  <input style={{ width: 80 }} inputMode="numeric" value={timeS} onChange={(e) => setTimeS(e.target.value)} />
+                  <span>s</span>
+                </div>
+
+                <button onClick={savePerf} disabled={!selectedRunnerId}>
+                  Save
+                </button>
               </div>
-            )}
+            </div>
+
+            <div style={{ border: "1px solid #ddd", borderRadius: 10, padding: 14 }}>
+              <h2 style={{ marginTop: 0 }}>Team legs</h2>
+
+              {legs.length === 0 ? (
+                <p>No performances yet.</p>
+              ) : (
+                <div style={{ display: "grid", gap: 10 }}>
+                  {legs.map((l) => {
+                    const dist = Number(l.distance_km || 0);
+                    const time = Number(l.time_seconds || 0);
+                    const p = dist > 0 ? time / dist : Infinity;
+
+                    return (
+                      <div key={l.runner_id} style={{ padding: 10, border: "1px solid #eee", borderRadius: 10 }}>
+                        <b>{runnerNameById(l.runner_id)}</b>
+                        <div>
+                          {dist.toFixed(2)} km — {secondsToHms(time)} — <b>{pace(p)}</b>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </>
       )}
