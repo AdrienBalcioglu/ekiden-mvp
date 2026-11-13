@@ -1,16 +1,40 @@
-# React + Vite
+# Ekiden
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A small web app to run an ekiden (a marathon relay) as a team: create a team, share a join code, and track each runner's leg.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- Create a team and get a join code (`EKIDEN-XXXX`) to share with your runners
+- Join a team from any phone with the code, no account needed
+- Add runners and record each leg: distance and time
+- Team dashboard with the pace of every runner and the total time
 
-## React Compiler
+## Stack
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+React · Vite · Supabase (Postgres) · Cloudflare Workers static assets
 
-## Expanding the ESLint configuration
+## Getting started
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+npm install
+npm run dev
+```
+
+Create a `.env` file with the keys of your Supabase project:
+
+```bash
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+
+The app expects three tables: `teams` (with a unique `join_code`), `runners` and `legs2`.
+
+`npm run build` then `npx wrangler deploy` publishes the `dist/` folder to Cloudflare.
+
+## Security notes
+
+This is an MVP built for one race day. There are no user accounts: the join code is the only thing that protects a team, and the app uses the public Supabase anon key. Add Supabase Auth and row level security before using it for anything sensitive.
+
+## License
+
+[MIT](LICENSE) © 2026 Adrien Balcioglu
